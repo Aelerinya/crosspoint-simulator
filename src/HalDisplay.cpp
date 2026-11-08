@@ -423,6 +423,16 @@ static constexpr const char *WINDOW_TITLE =
 #undef SIMULATOR_CONTROLLER_TITLE
 
 void HalDisplay::begin() {
+  // Scripted runs (CROSSPOINT_SIM_INPUT_SCRIPT) are headless unless asked
+  // otherwise: no window popping up or taking focus. SHOT and
+  // CROSSPOINT_SIM_FRAMES_DIR read pixelBuf, so they work without a window.
+  // CROSSPOINT_SIM_WINDOW=1 (or an explicit SDL_VIDEODRIVER) shows it.
+  const char *script = std::getenv("CROSSPOINT_SIM_INPUT_SCRIPT");
+  const char *showWindow = std::getenv("CROSSPOINT_SIM_WINDOW");
+  if (script && script[0] != '\0' && !std::getenv("SDL_VIDEODRIVER") &&
+      !(showWindow && std::atoi(showWindow) != 0)) {
+    setenv("SDL_VIDEODRIVER", "dummy", 1);
+  }
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
     std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError()
               << std::endl;
