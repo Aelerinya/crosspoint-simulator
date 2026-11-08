@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "HalPowerManager.h"
 
 #include "HalGPIO.h"
@@ -20,7 +21,11 @@ bool HalPowerManager::holdWhileUsbPowered(
 }
 #endif
 void HalPowerManager::setPowerSaving(bool enable) {}
-uint16_t HalPowerManager::getBatteryPercentage() const { return 100; }
+// CROSSPOINT_SIM_BATTERY=N fakes the charge level (default 100).
+uint16_t HalPowerManager::getBatteryPercentage() const {
+  const char *v = std::getenv("CROSSPOINT_SIM_BATTERY");
+  return v ? static_cast<uint16_t>(std::atoi(v)) : 100;
+}
 
 HalPowerManager::Lock::Lock() {}
 HalPowerManager::Lock::~Lock() {}

@@ -35,8 +35,9 @@ public:
     }
     return total;
   }
-  virtual int available() { return 0; }
-  virtual int read() { return -1; }
+  virtual int available();
+  virtual int read();
+  virtual int read(uint8_t *buf, size_t size);
   virtual void stop();
   virtual void clear() {}
   virtual uint8_t connected();

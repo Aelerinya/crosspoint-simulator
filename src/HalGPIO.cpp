@@ -985,7 +985,11 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   }
   return WakeupReason::Other;
 }
-bool HalGPIO::isUsbConnected() const { return true; }
+// CROSSPOINT_SIM_USB=0 simulates running on battery.
+bool HalGPIO::isUsbConnected() const {
+  const char *v = std::getenv("CROSSPOINT_SIM_USB");
+  return v ? std::atoi(v) != 0 : true;
+}
 bool HalGPIO::wasUsbStateChanged() const { return false; }
 void HalGPIO::startDeepSleep() {
   clearButtonState();

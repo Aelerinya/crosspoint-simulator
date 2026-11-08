@@ -205,6 +205,10 @@ public:
     return currentStatus == WL_CONNECTED ? IPAddress(127, 0, 0, 1)
                                          : IPAddress();
   }
+  IPAddress gatewayIP() {
+    return currentStatus == WL_CONNECTED ? IPAddress(127, 0, 0, 1)
+                                         : IPAddress();
+  }
   void persistent(bool) {}
   void disconnect(bool wifioff = false, bool eraseap = false) {
     (void)wifioff;

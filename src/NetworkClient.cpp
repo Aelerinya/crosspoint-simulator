@@ -1,6 +1,8 @@
 #include "NetworkClient.h"
 
 #include <netdb.h>
+#include <sys/ioctl.h>
+#include <cstdlib>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -26,6 +28,10 @@ int NetworkClient::connect(const char *host, uint16_t port) {
   if (!host || host[0] == '\0')
     return 0;
 
+  // Lets a simulated reader reach a peer's web server on a local test port.
+  const char *peerPort = std::getenv("CROSSPOINT_SIM_PEER_PORT");
+  if (port == 80 && peerPort && *peerPort)
+    port = static_cast<uint16_t>(std::atoi(peerPort));
   char service[8] = {};
   snprintf(service, sizeof(service), "%u", static_cast<unsigned>(port));
 
@@ -109,4 +115,36 @@ void NetworkClient::stop() {
   }
 }
 
-uint8_t NetworkClient::connected() { return (impl_ && impl_->fd >= 0) ? 1 : 0; }
+int NetworkClient::available() {
+  if (!impl_ || impl_->fd < 0)
+    return 0;
+  int pending = 0;
+  if (::ioctl(impl_->fd, FIONREAD, &pending) != 0)
+    return 0;
+  return pending;
+}
+
+int NetworkClient::read(uint8_t *buf, size_t size) {
+  if (!impl_ || impl_->fd < 0 || !buf || size == 0)
+    return -1;
+  const ssize_t n = ::recv(impl_->fd, buf, size, MSG_DONTWAIT);
+  if (n == 0) {
+    stop();
+    return -1;
+  }
+  return n < 0 ? -1 : static_cast<int>(n);
+}
+
+int NetworkClient::read() {
+  uint8_t c = 0;
+  return read(&c, 1) == 1 ? c : -1;
+}
+
+// Arduino reports a closed peer as disconnected once its data is drained.
+uint8_t NetworkClient::connected() {
+  if (!impl_ || impl_->fd < 0)
+    return 0;
+  char probe;
+  const ssize_t n = ::recv(impl_->fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
+  return n == 0 ? 0 : 1;
+}
