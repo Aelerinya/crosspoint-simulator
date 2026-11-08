@@ -34,7 +34,7 @@ The simulator is a collection of host-side reimplementations of the firmware's h
 - **POSIX fds, not std::fstream, in [src/HalStorage.cpp](src/HalStorage.cpp).** This was a deliberate rewrite. fstream's separate get/put pointers, eofbit-blocks-seek behaviour, and write-only seek restrictions caused several silent-corruption bugs. Do not reintroduce fstream here. All paths are prefixed with `./fs_` so the simulated filesystem stays sandboxed under the binary's working directory; `/books/` on the SD card maps to `./fs_/books/`. Directory iteration skips only the special `.` and `..` entries; firmware applies its own hidden-file policy.
 - **FreeRTOS shim.** [src/freertos/](src/freertos/) maps `xTaskCreate` to `std::thread`, task notifies to a condvar + counter, and `SemaphoreHandle_t` to a tagged handle with two arms, a `std::recursive_mutex` for `xSemaphoreCreateMutex` and a real binary semaphore for `xSemaphoreCreateBinary`. A `thread_local SimTaskHandle*` lets each task thread find its own handle.
 - **`_exit(0)` not `return 0`.** [src/simulator_main.cpp](src/simulator_main.cpp) ends with `_exit(0)` after `SDL_Quit()` to skip C++ global destructors. The render task is `[[noreturn]]`, so running destructors while it is mid-render races and produces a "quit unexpectedly" dialog. Keep this.
-- **Time uses `steady_clock`.** `millis()` / `micros()` in [src/Arduino.h](src/Arduino.h) deliberately use `steady_clock`, not `system_clock`, so wall-clock changes do not perturb timing.
+- **Time uses `steady_clock`.** `millis()` / `micros()` in [src/Arduino.h](src/Arduino.h) deliberately use `steady_clock`, not `system_clock`, so wall-clock changes do not perturb timing. They, `delay()`, `vTaskDelay()` and semaphore timeouts all go through [src/SimClock.h](src/SimClock.h), which scales them by `CROSSPOINT_SIM_SPEED`.
 
 **Host-specific code paths:**
 
@@ -104,8 +104,13 @@ touch-device edges through the same `HalGPIO` state as real SDL input, and
 Script `WAIT` steps match firmware serial lines kept by
 [src/SimLog.cpp](src/SimLog.cpp) and start a new timing segment; `SHOT`
 requests a capture from the input path.
-Keep synthetic held-time timestamps on the `SDL_GetTicks()` clock used by real
-keyboard events; the firmware's `millis()` clock has a different origin. The
+Held-key timestamps (real and synthetic) use `simTicks()` (`millis()+1`), the
+same scaled clock as the firmware (`CROSSPOINT_SIM_SPEED`, see
+[src/SimClock.h](src/SimClock.h)); do not reintroduce `SDL_GetTicks()` there.
+While a script runs, host keyboard/mouse input is ignored
+(`CROSSPOINT_SIM_HOST_INPUT` overrides). `CROSSPOINT_SIM_FRAMES_DIR` saves every
+displayed frame from the render path; SHOT copies `pixelBuf`, so both work
+with `SDL_VIDEODRIVER=dummy`. The
 deep-sleep loop must also process synthetic input. Process relaunch promotes
 the optional `*_AFTER_WAKE` schedules and clears the pre-sleep schedules so
 automation cannot enter an infinite sleep/relaunch cycle.

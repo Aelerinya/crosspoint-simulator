@@ -37,6 +37,31 @@ void scheduleSimulatorScreenshot(const std::string &path);
 //   Simulator sleep shortcut → S
 
 static constexpr int NUM_BUTTONS = 7;
+
+// Held-key timestamps use the simulated clock (CROSSPOINT_SIM_SPEED scales it
+// with millis()). +1 keeps 0 meaning "never pressed".
+static unsigned long simTicks() { return millis() + 1; }
+
+// While CROSSPOINT_SIM_INPUT_SCRIPT runs, host keyboard and mouse input is
+// ignored: a key the host reports as held (focus change, a key pressed in
+// another window) otherwise reaches the firmware, e.g. as a held Power key
+// that sleeps the device mid-script. CROSSPOINT_SIM_HOST_INPUT=1 keeps host
+// input during scripts; =0 ignores it without a script.
+static bool hostInputIgnored() {
+  static const bool ignored = [] {
+    if (const char *v = std::getenv("CROSSPOINT_SIM_HOST_INPUT"))
+      return std::atoi(v) == 0;
+    const char *script = std::getenv("CROSSPOINT_SIM_INPUT_SCRIPT");
+    return script && script[0] != '\0';
+  }();
+  return ignored;
+}
+
+static const uint8_t *hostKeyState() {
+  static const uint8_t none[SDL_NUM_SCANCODES] = {};
+  return hostInputIgnored() ? none : hostKeyState();
+}
+
 static constexpr SDL_Scancode SIMULATOR_SLEEP_SCANCODE = SDL_SCANCODE_S;
 static constexpr SDL_Scancode HOME_KEY_SCANCODE = SDL_SCANCODE_H;
 static constexpr SDL_Scancode SLIDE_SWITCH_SCANCODE = SDL_SCANCODE_T;
@@ -205,7 +230,7 @@ void beginTouch(float logicalNx, float logicalNy) {
   touchState.startNy = panelNy;
   touchState.currentNx = panelNx;
   touchState.currentNy = panelNy;
-  touchState.pressedAt = SDL_GetTicks();
+  touchState.pressedAt = simTicks();
 }
 
 void moveTouch(float logicalNx, float logicalNy) {
@@ -224,13 +249,13 @@ void endTouch(float logicalNx, float logicalNy) {
   touchState.down = false;
   touchState.releasedThisFrame = true;
   touchState.activityThisFrame = true;
-  touchState.lastHeldMs = SDL_GetTicks() - touchState.pressedAt;
+  touchState.lastHeldMs = simTicks() - touchState.pressedAt;
 }
 
 void updateTouchHold() {
   if (touchState.down && !touchState.movedBeyondTapSlop &&
       !touchState.longPressFired && !touchState.suppressed &&
-      SDL_GetTicks() - touchState.pressedAt >= TOUCH_LONG_PRESS_MS) {
+      simTicks() - touchState.pressedAt >= TOUCH_LONG_PRESS_MS) {
     touchState.longPressFired = true;
     touchState.longPressThisFrame = true;
   }
@@ -242,14 +267,14 @@ void beginHomeKey() {
   homeKeyDown = true;
   homeKeyPressedThisFrame = true;
   homeKeyLongFired = false;
-  homeKeyPressedAt = SDL_GetTicks();
+  homeKeyPressedAt = simTicks();
 }
 
 void endHomeKey() {
   if (!homeKeyDown)
     return;
   if (!homeKeyLongFired &&
-      SDL_GetTicks() - homeKeyPressedAt < HOME_KEY_LONG_PRESS_MS) {
+      simTicks() - homeKeyPressedAt < HOME_KEY_LONG_PRESS_MS) {
     homeKeyTappedThisFrame = true;
   }
   homeKeyDown = false;
@@ -257,7 +282,7 @@ void endHomeKey() {
 
 void updateHomeKeyHold() {
   if (homeKeyDown && !homeKeyLongFired &&
-      SDL_GetTicks() - homeKeyPressedAt >= HOME_KEY_LONG_PRESS_MS) {
+      simTicks() - homeKeyPressedAt >= HOME_KEY_LONG_PRESS_MS) {
     homeKeyLongFired = true;
     homeKeyLongPressedThisFrame = true;
   }
@@ -306,7 +331,7 @@ void requestSimulatorSleep() {
   // sleep path.
   pressedThisFrame[HalGPIO::BTN_POWER] = true;
   syntheticButtonDown[HalGPIO::BTN_POWER] = true;
-  buttonPressTime[HalGPIO::BTN_POWER] = SDL_GetTicks();
+  buttonPressTime[HalGPIO::BTN_POWER] = simTicks();
 }
 
 bool buttonAvailable(int button) {
@@ -329,9 +354,9 @@ void beginCoverButton(int button) {
   coverButtonDown[button] = true;
   capacitivePagePressedThisFrame = true;
   if (!syntheticButtonDown[button] &&
-      !SDL_GetKeyboardState(nullptr)[buttonScancode[button]]) {
+      !hostKeyState()[buttonScancode[button]]) {
     pressedThisFrame[button] = true;
-    buttonPressTime[button] = SDL_GetTicks();
+    buttonPressTime[button] = simTicks();
   }
 }
 
@@ -340,7 +365,7 @@ void endCoverButton(int button) {
     return;
   coverButtonDown[button] = false;
   if (!syntheticButtonDown[button] &&
-      !SDL_GetKeyboardState(nullptr)[buttonScancode[button]])
+      !hostKeyState()[buttonScancode[button]])
     releasedThisFrame[button] = true;
 }
 
@@ -542,12 +567,12 @@ void processSyntheticEvents() {
     case SyntheticAction::KeyDown:
       if (!buttonAvailable(event.button))
         break;
-      // Held-time calculations use SDL_GetTicks() for real keyboard events;
+      // Held-time calculations use simTicks() for real keyboard events;
       // synthetic presses must use the same clock origin to avoid unsigned
       // underflow being mistaken for an immediate long press.
       if (!coverButtonDown[event.button]) {
         pressedThisFrame[event.button] = true;
-        buttonPressTime[event.button] = SDL_GetTicks();
+        buttonPressTime[event.button] = simTicks();
       }
       syntheticButtonDown[event.button] = true;
       break;
@@ -716,6 +741,8 @@ void HalGPIO::update() {
   while (SDL_PollEvent(&e) != 0) {
     if (e.type == SDL_QUIT) {
       quitRequested.store(true);
+    } else if (hostInputIgnored()) {
+      continue;
     } else if (e.type == SDL_KEYDOWN && !e.key.repeat) {
       if (e.key.keysym.scancode == SLIDE_SWITCH_SCANCODE) {
         setToggleSwitch(!toggleSwitchOn);
@@ -739,7 +766,7 @@ void HalGPIO::update() {
       if (btn >= 0 && buttonAvailable(btn)) {
         if (!coverButtonDown[btn]) {
           pressedThisFrame[btn] = true;
-          buttonPressTime[btn] = SDL_GetTicks();
+          buttonPressTime[btn] = simTicks();
         }
       }
     } else if (e.type == SDL_KEYUP) {
@@ -794,7 +821,7 @@ void HalGPIO::update() {
 bool HalGPIO::isPressed(uint8_t buttonIndex) const {
   if (buttonIndex >= NUM_BUTTONS || !buttonAvailable(buttonIndex))
     return false;
-  const uint8_t *state = SDL_GetKeyboardState(NULL);
+  const uint8_t *state = hostKeyState();
   return state[buttonScancode[buttonIndex]] ||
          syntheticButtonDown[buttonIndex] || coverButtonDown[buttonIndex];
 }
@@ -836,9 +863,9 @@ bool HalGPIO::wasAnyReleased() const {
 
 unsigned long HalGPIO::getHeldTime() const {
   // Return the longest held time among all currently pressed buttons
-  unsigned long now = SDL_GetTicks();
+  unsigned long now = simTicks();
   unsigned long maxHeld = 0;
-  const uint8_t *state = SDL_GetKeyboardState(NULL);
+  const uint8_t *state = hostKeyState();
   for (int i = 0; i < NUM_BUTTONS; i++) {
     if (buttonAvailable(i) &&
         (state[buttonScancode[i]] || syntheticButtonDown[i] ||
@@ -853,11 +880,11 @@ unsigned long HalGPIO::getHeldTime() const {
 }
 
 unsigned long HalGPIO::getPowerButtonHeldTime() const {
-  const uint8_t *state = SDL_GetKeyboardState(NULL);
+  const uint8_t *state = hostKeyState();
   if ((!state[buttonScancode[BTN_POWER]] && !syntheticButtonDown[BTN_POWER]) ||
       buttonPressTime[BTN_POWER] == 0)
     return 0;
-  return SDL_GetTicks() - buttonPressTime[BTN_POWER];
+  return simTicks() - buttonPressTime[BTN_POWER];
 }
 
 bool HalGPIO::wasCapacitivePagePressed() const {
@@ -924,7 +951,7 @@ bool HalGPIO::isTouchTapCandidate(float &nx, float &ny,
   }
   nx = touchState.startNx;
   ny = touchState.startNy;
-  heldMs = SDL_GetTicks() - touchState.pressedAt;
+  heldMs = simTicks() - touchState.pressedAt;
   return true;
 }
 
@@ -1011,6 +1038,8 @@ void HalGPIO::startDeepSleep() {
         quitRequested.store(true);
         return;
       }
+      if (hostInputIgnored())
+        continue;
 
       if (e.type == SDL_KEYDOWN && !e.key.repeat &&
           e.key.keysym.scancode == SLIDE_SWITCH_SCANCODE) {

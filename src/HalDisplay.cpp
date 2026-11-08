@@ -6,6 +6,7 @@
 #include <SDL.h>
 
 #include <array>
+#include <cstdio>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -32,6 +33,8 @@ static std::atomic<bool> pendingPresent{false};
 // Written by HalGPIO::update() (which owns SDL event polling); read by
 // shouldQuit().
 std::atomic<bool> quitRequested{false};
+
+extern GfxRenderer renderer; // main.cpp
 
 static int currentWindowWidth = 0;
 static int currentWindowHeight = 0;
@@ -107,24 +110,44 @@ bool hasDueScreenshot() {
   return false;
 }
 
-bool saveRendererBmp(const std::string &path) {
-  int width = 0;
-  int height = 0;
-  if (SDL_GetRendererOutputSize(sdl_renderer, &width, &height) != 0 ||
-      width <= 0 || height <= 0) {
-    std::cerr << "[SIM] Cannot determine screenshot size: " << SDL_GetError()
-              << std::endl;
-    return false;
+// Copies pixelBuf (panel order, landscape) into `out` the way the window shows
+// it, i.e. rotated for the renderer's orientation. Caller holds pixelBufMutex.
+void logicalPixels(std::vector<uint32_t> &out, int &width, int &height) {
+  constexpr int W = HalDisplay::DISPLAY_WIDTH;
+  constexpr int H = HalDisplay::DISPLAY_HEIGHT;
+  const GfxRenderer::Orientation o = renderer.getOrientation();
+  const bool portrait =
+      o == GfxRenderer::Portrait || o == GfxRenderer::PortraitInverted;
+  width = portrait ? H : W;
+  height = portrait ? W : H;
+  out.resize(static_cast<size_t>(W) * H);
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      int sx = x;
+      int sy = y;
+      switch (o) {
+      case GfxRenderer::Portrait: // window rotates the panel 90° clockwise
+        sx = y;
+        sy = H - 1 - x;
+        break;
+      case GfxRenderer::PortraitInverted:
+        sx = W - 1 - y;
+        sy = x;
+        break;
+      case GfxRenderer::LandscapeClockwise:
+        sx = W - 1 - x;
+        sy = H - 1 - y;
+        break;
+      default:
+        break;
+      }
+      out[static_cast<size_t>(y) * width + x] = pixelBuf[sy * W + sx];
+    }
   }
+}
 
-  std::vector<uint32_t> pixels(static_cast<size_t>(width) * height);
-  if (SDL_RenderReadPixels(sdl_renderer, nullptr, SDL_PIXELFORMAT_ARGB8888,
-                           pixels.data(), width * sizeof(uint32_t)) != 0) {
-    std::cerr << "[SIM] Cannot read screenshot pixels: " << SDL_GetError()
-              << std::endl;
-    return false;
-  }
-
+bool savePixelsBmp(const std::string &path, std::vector<uint32_t> &pixels,
+                   int width, int height, bool quiet) {
   SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormatFrom(
       pixels.data(), width, height, 32, width * sizeof(uint32_t),
       SDL_PIXELFORMAT_ARGB8888);
@@ -133,16 +156,60 @@ bool saveRendererBmp(const std::string &path) {
               << std::endl;
     return false;
   }
-
   const bool saved = SDL_SaveBMP(surface, path.c_str()) == 0;
-  if (!saved) {
-    std::cerr << "[SIM] Cannot save screenshot " << path << ": "
-              << SDL_GetError() << std::endl;
-  } else {
+  if (!saved)
+    std::cerr << "[SIM] Cannot save " << path << ": " << SDL_GetError()
+              << std::endl;
+  else if (!quiet)
     std::cerr << "[SIM] Saved screenshot: " << path << std::endl;
-  }
   SDL_FreeSurface(surface);
   return saved;
+}
+
+// SHOT and CROSSPOINT_SIM_SCREENSHOTS save the last displayed frame from
+// pixelBuf rather than reading the SDL renderer back, so they also work with
+// SDL_VIDEODRIVER=dummy (headless runs).
+bool saveDisplayedFrameBmp(const std::string &path) {
+  std::vector<uint32_t> pixels;
+  int width = 0;
+  int height = 0;
+  {
+    const std::lock_guard<std::mutex> lock(pixelBufMutex);
+    logicalPixels(pixels, width, height);
+  }
+  return savePixelsBmp(path, pixels, width, height, false);
+}
+
+// CROSSPOINT_SIM_FRAMES_DIR=dir saves every displayed frame (each B/W refresh
+// and each grayscale composite) as dir/NNNNN.bmp, with dir/frames.txt listing
+// "index millis kind". Unlike SHOT this runs on the render path itself, so it
+// also catches frames drawn while the main loop is blocked (transitions,
+// interstitials). Caller holds pixelBufMutex.
+void dumpFrameIfEnabled(const char *kind) {
+  static const char *dir = std::getenv("CROSSPOINT_SIM_FRAMES_DIR");
+  if (!dir || dir[0] == '\0')
+    return;
+  static unsigned frameIndex = 0;
+  static FILE *index = nullptr;
+  if (!index) {
+    index = std::fopen((std::string(dir) + "/frames.txt").c_str(), "w");
+    if (!index) {
+      std::cerr << "[SIM] Cannot write frames to " << dir << std::endl;
+      dir = nullptr;
+      return;
+    }
+  }
+  std::vector<uint32_t> pixels;
+  int width = 0;
+  int height = 0;
+  logicalPixels(pixels, width, height);
+  char name[32];
+  std::snprintf(name, sizeof(name), "/%05u.bmp", frameIndex);
+  if (savePixelsBmp(std::string(dir) + name, pixels, width, height, true)) {
+    std::fprintf(index, "%05u %lu %s\n", frameIndex, millis(), kind);
+    std::fflush(index);
+    frameIndex++;
+  }
 }
 
 void captureDueScreenshots() {
@@ -152,7 +219,7 @@ void captureDueScreenshots() {
     if (event.handled || event.atMs > now)
       continue;
     event.handled = true;
-    saveRendererBmp(event.path);
+    saveDisplayedFrameBmp(event.path);
   }
 }
 
@@ -177,6 +244,7 @@ void renderBwPixels(const uint8_t *fb) {
           (white != invert) ? 0xFFFFFFFFu : 0xFF000000u;
     }
   }
+  dumpFrameIfEnabled("bw");
   pendingPresent.store(true);
 }
 
@@ -251,6 +319,7 @@ void composeGrayscalePreview() {
       pixelBuf[y * HalDisplay::DISPLAY_WIDTH + x] = argbGray(level);
     }
   }
+  dumpFrameIfEnabled("gray");
   pendingPresent.store(true);
 }
 
@@ -475,6 +544,11 @@ void HalDisplay::presentIfNeeded() {
   if (!pendingPresent.exchange(false) && !screenshotDue)
     return;
 
+  // Screenshots come from pixelBuf, so they work without a renderer too.
+  if (screenshotDue) {
+    captureDueScreenshots();
+  }
+
   if (!texture || !sdl_renderer)
     return;
 
@@ -528,9 +602,6 @@ void HalDisplay::presentIfNeeded() {
   }
   }
 
-  if (screenshotDue) {
-    captureDueScreenshots();
-  }
   SDL_RenderPresent(sdl_renderer);
 }
 

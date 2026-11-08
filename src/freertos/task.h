@@ -1,5 +1,7 @@
 #pragma once
 #include <chrono>
+
+#include "../SimClock.h"
 #include <cstdint>
 
 #include "FreeRTOS.h"
@@ -95,6 +97,5 @@ inline void vTaskDelay(uint32_t ticks) {
     std::this_thread::yield();
     return;
   }
-  std::this_thread::sleep_for(std::chrono::milliseconds(
-      static_cast<int64_t>(ticks) * portTICK_PERIOD_MS));
+  sim_clock::sleepMs(static_cast<int64_t>(ticks) * portTICK_PERIOD_MS);
 }

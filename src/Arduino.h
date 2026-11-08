@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 
+#include "SimClock.h"
 #include "freertos/FreeRTOS.h"
 
 #define PROGMEM
@@ -21,21 +22,16 @@
 #define PGM_P const char *
 #define PSTR(s) (s)
 
+// Simulated time; CROSSPOINT_SIM_SPEED scales it (see SimClock.h).
 inline unsigned long millis() {
-  using namespace std::chrono;
-  static const auto start = steady_clock::now();
-  return duration_cast<milliseconds>(steady_clock::now() - start).count();
+  return static_cast<unsigned long>(sim_clock::millis());
 }
 
 inline unsigned long micros() {
-  using namespace std::chrono;
-  static const auto start = steady_clock::now();
-  return duration_cast<microseconds>(steady_clock::now() - start).count();
+  return static_cast<unsigned long>(sim_clock::micros());
 }
 
-inline void delay(unsigned long ms) {
-  std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-}
+inline void delay(unsigned long ms) { sim_clock::sleepMs(ms); }
 inline void yield() { std::this_thread::yield(); }
 inline void configTzTime(const char *, const char *) {}
 

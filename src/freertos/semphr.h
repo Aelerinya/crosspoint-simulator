@@ -1,4 +1,5 @@
 #pragma once
+#include "../SimClock.h"
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -56,9 +57,10 @@ inline SimBinarySemaphore *asBinary(SemaphoreHandle_t sem) {
 // FreeRTOS timeouts are in ticks. portTICK_PERIOD_MS (FreeRTOS.h) is the one
 // tick-rate definition this shim has, so convert through it rather than
 // assuming a tick is a millisecond.
-inline std::chrono::milliseconds ticksToDuration(uint32_t ticks) {
-  return std::chrono::milliseconds(static_cast<int64_t>(ticks) *
-                                   portTICK_PERIOD_MS);
+// Scaled by CROSSPOINT_SIM_SPEED like every other simulated wait.
+inline std::chrono::microseconds ticksToDuration(uint32_t ticks) {
+  return sim_clock::realDuration(static_cast<int64_t>(ticks) *
+                                 portTICK_PERIOD_MS);
 }
 
 } // namespace sim_semaphore_detail
