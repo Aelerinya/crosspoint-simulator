@@ -110,7 +110,9 @@ same scaled clock as the firmware (`CROSSPOINT_SIM_SPEED`, see
 While a script runs, host keyboard/mouse input is ignored
 (`CROSSPOINT_SIM_HOST_INPUT` overrides). `CROSSPOINT_SIM_FRAMES_DIR` saves every
 displayed frame from the render path; SHOT copies `pixelBuf`, so both work
-with `SDL_VIDEODRIVER=dummy`. The
+with `SDL_VIDEODRIVER=dummy`, which `HalDisplay::begin` sets itself while a
+script runs (`CROSSPOINT_SIM_WINDOW=1` or an explicit `SDL_VIDEODRIVER` keeps
+the window). The
 deep-sleep loop must also process synthetic input. Process relaunch promotes
 the optional `*_AFTER_WAKE` schedules and clears the pre-sleep schedules so
 automation cannot enter an infinite sleep/relaunch cycle.
