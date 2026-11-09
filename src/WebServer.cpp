@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -698,8 +699,16 @@ void WebServer::handleClient() {
       impl_->currentUpload.currentSize = 0;
       impl_->currentUpload.buf = nullptr;
       callback();
+      // The body is already buffered; CROSSPOINT_SIM_UPLOAD_CHUNK_DELAY_MS
+      // spaces the chunks out like a slow link (for upload progress screens).
+      static const long chunkDelayMs = [] {
+        const char *v = getenv("CROSSPOINT_SIM_UPLOAD_CHUNK_DELAY_MS");
+        return v ? std::max(0L, strtol(v, nullptr, 10)) : 0L;
+      }();
       for (size_t offset = 0; offset < part.data.size();
            offset += UPLOAD_CHUNK_SIZE) {
+        if (chunkDelayMs > 0 && offset > 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(chunkDelayMs));
         impl_->currentUpload.status = UPLOAD_FILE_WRITE;
         impl_->currentUpload.currentSize =
             std::min(UPLOAD_CHUNK_SIZE, part.data.size() - offset);

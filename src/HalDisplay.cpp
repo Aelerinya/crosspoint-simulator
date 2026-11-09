@@ -531,6 +531,8 @@ void HalDisplay::displayBufferAsync(RefreshMode mode) {
   refreshDisplay(mode, false);
 }
 
+void HalDisplay::displayBufferDeferred(RefreshMode mode) { displayBuffer(mode, false); }
+
 void HalDisplay::waitRefreshComplete() {}
 
 bool HalDisplay::supportsAsyncRefresh() const { return false; }

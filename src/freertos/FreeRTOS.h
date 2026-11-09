@@ -24,6 +24,9 @@
 
 using BaseType_t = int;
 
+#define pdPASS 1
+#define tskIDLE_PRIORITY 0
+
 // ESP-IDF's portMUX_TYPE is a spinlock used with taskENTER_CRITICAL /
 // taskEXIT_CRITICAL to guard data shared between tasks (and, on multi-core
 // targets, cores). The simulator has no real critical-section primitive, so
